@@ -6,13 +6,15 @@ from tkinter import ttk
 import os
 import re
 import queue
+import webbrowser
+import imageio_ffmpeg as iio_ffmpeg
 
 class YouTubeAudioBatchConverter:
     def __init__(self):
         self.process = None
         self.cancelled = False
         self.root = tk.Tk()
-        self.root.title("Audio → Video Utility")
+        self.root.title("Audio to Video Converter")
         self.root.geometry("600x400")
         self.root.minsize(500, 350)
         self.log_queue = queue.Queue()
@@ -26,6 +28,7 @@ class YouTubeAudioBatchConverter:
         self.audio_files = []
         self.image_file = None
         self.output_dir = None
+        self.ffmpeg_bin = iio_ffmpeg.get_ffmpeg_exe()
 
         self.create_widgets()
         self.process_log_queue()
@@ -40,6 +43,7 @@ class YouTubeAudioBatchConverter:
         ttk.Button(toolbar, text="× Clear", command=self.clear_all_audio).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Image…", command=self.select_image).pack(side=tk.LEFT, padx=10)
         ttk.Button(toolbar, text="Output…", command=self.select_output_dir).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Help", command=self.show_help).pack(side=tk.RIGHT, padx=2)
 
         # File list and info
         info_frame = ttk.Frame(self.root, padding=5)
@@ -80,6 +84,18 @@ class YouTubeAudioBatchConverter:
 
         self.console = scrolledtext.ScrolledText(console_frame, width=80, height=8, state='disabled')
         self.console.pack(fill=tk.BOTH, expand=True)
+
+    def show_help(self):
+        help_win = tk.Toplevel(self.root)
+        help_win.title("Help")
+        help_win.geometry("400x200")
+
+        msg = tk.Label(help_win, text="Basic directions: \n \nAdd audio file(s) with [+Audio] button. \nAdd a picture with [Image...] button. \nChoose destination for output with [Output...] button. \nClick [Start] to convert.", justify="left")
+        msg.pack(padx=10, pady=10, anchor="w")
+
+        link = tk.Label(help_win, text="For detailed documentation, click here.", fg="blue", cursor="hand2", underline=True)
+        link.pack(padx=10, pady=5, anchor="w")
+        link.bind("<Button-1>", lambda e: webbrowser.open("https://bertjerred.github.io/ytaudio/"))
 
     def select_audio(self):
         files = filedialog.askopenfilenames(title="Select Audio Files", filetypes=[("Audio files", "*.mp3 *.wav *.flac *.aac *.ogg"), ("All files", "*.*")])
@@ -130,7 +146,7 @@ class YouTubeAudioBatchConverter:
     def run_batch_conversion(self):
         self.cancelled = False
         vf = "scale=w=1920:h=1080:force_original_aspect_ratio=decrease,pad=w=1920:h=1080:x=(ow-iw)/2:y=(oh-ih)/2"
-        
+
         for i, audio_file in enumerate(self.audio_files):
             if self.cancelled:
                 self.log("🛑 Batch conversion cancelled.")
@@ -142,12 +158,13 @@ class YouTubeAudioBatchConverter:
             self.log(f"\n🚀 Converting {audio_file} → {output_file}")
 
             cmd = [
-                "ffmpeg", "-y", "-i", audio_file,
+                self.ffmpeg_bin, "-y", "-i", audio_file,
                 "-loop", "1", "-i", self.image_file,
                 "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac",
                 "-b:a", "192k", "-pix_fmt", "yuv420p", "-shortest",
                 "-vf", vf, output_file
             ]
+
             duration = self.get_audio_duration(audio_file)
             self.run_ffmpeg(cmd, i, duration)
 
@@ -160,13 +177,18 @@ class YouTubeAudioBatchConverter:
         self.cancel_button.config(state='disabled')
 
     def get_audio_duration(self, audio_file):
-        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_file]
+        # Extract duration using ffmpeg stderr output instead of ffprobe
+        cmd = [self.ffmpeg_bin, "-i", audio_file, "-hide_banner", "-f", "null", "-"]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return float(result.stdout.strip())
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            stderr = result.stderr
+            match = re.search(r"Duration: (\d+):(\d+):(\d+).(\d+)", stderr)
+            if match:
+                hours, minutes, seconds, ms = map(int, match.groups())
+                return hours * 3600 + minutes * 60 + seconds + ms / 100
         except Exception as e:
             self.log(f"Could not get duration for {audio_file}: {e}")
-            return None
+        return None
 
     def run_ffmpeg(self, cmd, file_index, duration):
         self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, bufsize=1)
@@ -231,11 +253,5 @@ class YouTubeAudioBatchConverter:
         self.root.mainloop()
 
 if __name__ == "__main__":
-    try:
-        subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True)
-        subprocess.run(["ffprobe", "-version"], check=True, capture_output=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        messagebox.showerror("Error", "FFmpeg or ffprobe not found. Please install FFmpeg to use this app.")
-    else:
-        app = YouTubeAudioBatchConverter()
-        app.run()
+    app = YouTubeAudioBatchConverter()
+    app.run()
